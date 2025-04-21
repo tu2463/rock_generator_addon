@@ -11,61 +11,83 @@ bl_info = {
 import bpy
 import os
 
-# Globals
-NODE_GROUP_NAME = "RockGenerator"
+ROCK_GROUP_NAME = "RockGenerator"
+ROCK_BLEND_FILE = "rock_generator.blend"
+tracked_objects = set()
 
-loaded_node = False
-known_objects = set()
 
-def load_node_group():
-    if NODE_GROUP_NAME in bpy.data.node_groups:
-        return True  # already loaded
+def get_addon_dir():
+    return os.path.dirname(__file__)
 
-    addon_dir = os.path.dirname(__file__)
-    blend_path = os.path.join(addon_dir, "rock_generator.blend")
+
+def append_node_group():
+    if ROCK_GROUP_NAME in bpy.data.node_groups:
+        print("[RockGen] Node group already loaded.")
+        return
+
+    blend_path = os.path.join(get_addon_dir(), ROCK_BLEND_FILE)
     if not os.path.exists(blend_path):
-        print(f"[RockGen] Missing file: {blend_path}")
-        return False
+        print(f"[RockGen] File not found: {blend_path}")
+        return
 
     with bpy.data.libraries.load(blend_path, link=False) as (data_from, data_to):
-        if NODE_GROUP_NAME in data_from.node_groups:
-            data_to.node_groups = [NODE_GROUP_NAME]
-            print(f"[RockGen] Node group '{NODE_GROUP_NAME}' appended.")
-            return True
+        if ROCK_GROUP_NAME in data_from.node_groups:
+            data_to.node_groups = [ROCK_GROUP_NAME]
+            print(f"[RockGen] Node group '{ROCK_GROUP_NAME}' appended.")
         else:
-            print(f"[RockGen] Node group '{NODE_GROUP_NAME}' not found in .blend.")
-            return False
+            print(f"[RockGen] Node group '{ROCK_GROUP_NAME}' not found in {blend_path}.")
 
-def apply_rock_modifier(obj):
-    if obj and obj.type == 'MESH':
-        if not any(mod.type == 'NODES' and mod.node_group and mod.node_group.name == NODE_GROUP_NAME for mod in obj.modifiers):
-            mod = obj.modifiers.new(name="Rockify", type='NODES')
-            mod.node_group = bpy.data.node_groups.get(NODE_GROUP_NAME)
-            print(f"[RockGen] Applied RockGenerator to {obj.name}")
 
-def handle_new_objects(scene):
-    global known_objects
-    new_objs = {obj.name for obj in bpy.data.objects} - known_objects
-    for name in new_objs:
-        obj = bpy.data.objects.get(name)
+def apply_geometry_nodes_modifier(obj):
+    if obj is None or obj.type != 'MESH':
+        return
+
+    node_group = bpy.data.node_groups.get(ROCK_GROUP_NAME)
+    if node_group is None:
+        print("[RockGen] Node group not yet available.")
+        return
+
+    # Check if already has this modifier
+    for mod in obj.modifiers:
+        if mod.type == 'NODES' and mod.node_group == node_group:
+            return
+
+    mod = obj.modifiers.new(name="RockModifier", type='NODES')
+    mod.node_group = node_group
+    print(f"[RockGen] Modifier applied to {obj.name}.")
+
+
+def on_scene_update(scene):
+    global tracked_objects
+    current_names = {obj.name for obj in bpy.data.objects}
+    new_objects = current_names - tracked_objects
+
+    for obj_name in new_objects:
+        obj = bpy.data.objects.get(obj_name)
         if obj and obj.type == 'MESH' and "cube" in obj.name.lower():
-            apply_rock_modifier(obj)
-    known_objects = {obj.name for obj in bpy.data.objects}
+            print(f"[RockGen] New cube detected: {obj.name}")
+            apply_geometry_nodes_modifier(obj)
 
-def init_on_load(dummy=None):
-    global known_objects
-    if load_node_group():
-        known_objects = {obj.name for obj in bpy.data.objects}
-        print(f"[RockGen] Initialized. Tracking {len(known_objects)} objects.")
+    tracked_objects = current_names
+
+
+def on_file_load(_):
+    append_node_group()
+    global tracked_objects
+    tracked_objects = {obj.name for obj in bpy.data.objects}
+    print(f"[RockGen] Tracked {len(tracked_objects)} existing objects.")
+
 
 def register():
-    bpy.app.handlers.load_post.append(init_on_load)
-    bpy.app.handlers.depsgraph_update_post.append(handle_new_objects)
-    print("[RockGen] Add-on enabled.")
+    bpy.app.timers.register(append_node_group, first_interval=0.1)
+    bpy.app.handlers.load_post.append(on_file_load)
+    bpy.app.handlers.depsgraph_update_post.append(on_scene_update)
+    print("[RockGen] Add-on registered.")
+
 
 def unregister():
-    if init_on_load in bpy.app.handlers.load_post:
-        bpy.app.handlers.load_post.remove(init_on_load)
-    if handle_new_objects in bpy.app.handlers.depsgraph_update_post:
-        bpy.app.handlers.depsgraph_update_post.remove(handle_new_objects)
-    print("[RockGen] Add-on disabled.")
+    if on_file_load in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(on_file_load)
+    if on_scene_update in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.remove(on_scene_update)
+    print("[RockGen] Add-on unregistered.")
