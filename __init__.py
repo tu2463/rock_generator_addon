@@ -1,8 +1,8 @@
 bl_info = {
-    "name": "Rock Generator",
-    "author": "Your Name",
-    "version": (1, 0),
-    "blender": (2, 93, 0),
+    "name": "Auto Rock Generator",
+    "author": "cheyut",
+    "version": (1, 1),
+    "blender": (3, 0, 0),
     "location": "Auto Applies to Cubes",
     "description": "Automatically applies procedural rock geometry node to cubes.",
     "category": "Object",
@@ -11,37 +11,58 @@ bl_info = {
 import bpy
 import os
 
+# Globals
+NODE_GROUP_NAME = "RockGenerator"
+
+loaded_node = False
+known_objects = set()
+
 def load_node_group():
+    global loaded_node
+    if loaded_node or NODE_GROUP_NAME in bpy.data.node_groups:
+        return
+
     addon_dir = os.path.dirname(__file__)
     blend_path = os.path.join(addon_dir, "rock_generator.blend")
+    if not os.path.exists(blend_path):
+        print(f"[RockGen] Missing: {blend_path}")
+        return
 
-    if "RockGenerator" not in bpy.data.node_groups:
-        with bpy.data.libraries.load(blend_path, link=False) as (data_from, data_to):
-            if "RockGenerator" in data_from.node_groups:
-                data_to.node_groups = ["RockGenerator"]
+    with bpy.data.libraries.load(blend_path, link=False) as (data_from, data_to):
+        if NODE_GROUP_NAME in data_from.node_groups:
+            data_to.node_groups = [NODE_GROUP_NAME]
+            print(f"[RockGen] Node group '{NODE_GROUP_NAME}' loaded!")
+            loaded_node = True
+        else:
+            print(f"[RockGen] Node group not found in file.")
 
-def apply_node_to_cube(obj):
-    if obj.type == 'MESH' and obj.name.lower().startswith("cube"):
-        if not any(mod.type == 'NODES' for mod in obj.modifiers):
-            mod = obj.modifiers.new(name="RockModifier", type='NODES')
-            mod.node_group = bpy.data.node_groups.get("RockGenerator")
+def apply_rock_to_cube(obj):
+    if obj and obj.type == 'MESH' and NODE_GROUP_NAME in bpy.data.node_groups:
+        if not any(mod.type == 'NODES' and mod.node_group and mod.node_group.name == NODE_GROUP_NAME for mod in obj.modifiers):
+            mod = obj.modifiers.new(name="Rockify", type='NODES')
+            mod.node_group = bpy.data.node_groups[NODE_GROUP_NAME]
 
-def depsgraph_handler(scene):
-    # Check all objects; if new cube exists without the modifier, apply it
-    for obj in scene.objects:
-        if obj.name.lower().startswith("cube") and obj.type == 'MESH':
-            if not any(mod.type == 'NODES' and mod.node_group == bpy.data.node_groups.get("RockGenerator") for mod in obj.modifiers):
-                apply_node_to_cube(obj)
+def object_add_handler(scene):
+    global known_objects
+    current_names = {obj.name for obj in bpy.data.objects}
+    new_names = current_names - known_objects
+    for name in new_names:
+        obj = bpy.data.objects.get(name)
+        if obj and obj.type == 'MESH' and "cube" in obj.name.lower():
+            apply_rock_to_cube(obj)
+    known_objects = current_names
 
-# Register/unregister
-def register():
+def track_existing_objects(dummy=None):
+    global known_objects
     load_node_group()
-    if depsgraph_handler not in bpy.app.handlers.depsgraph_update_post:
-        bpy.app.handlers.depsgraph_update_post.append(depsgraph_handler)
+    known_objects = {obj.name for obj in bpy.data.objects}
+
+def register():
+    bpy.app.handlers.load_post.append(track_existing_objects)
+    bpy.app.handlers.depsgraph_update_post.append(object_add_handler)
 
 def unregister():
-    if depsgraph_handler in bpy.app.handlers.depsgraph_update_post:
-        bpy.app.handlers.depsgraph_update_post.remove(depsgraph_handler)
-
-if __name__ == "__main__":
-    register()
+    if track_existing_objects in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(track_existing_objects)
+    if object_add_handler in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.remove(object_add_handler)
